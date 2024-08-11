@@ -1,0 +1,416 @@
+import random
+import time
+import pygame as pg
+import pygame_gui as pgui
+import noise
+
+CHUNK_SIZE = 24
+
+# Impostazioni di base
+direction = 'right' 
+health = 100
+coin = 0
+jump_speed = 10
+gravity = 0.5
+is_jumping = False
+character_y = 520
+character_x = 100
+character_height = 150
+character_width = 100
+world_width = 2000
+world_height = 100
+block_size = 25
+mouse_press_start_time = None
+mouse_held_duration = 3  # Durata in secondi
+
+pg.init()
+
+pg.display.set_caption("SpaceMan")
+screen = pg.display.set_mode((1280, 720))
+
+# Carica le immagini
+hearth_img = pg.image.load("images/hearth.png")
+broken_hearth_img = pg.image.load("images/broken_hearth.png")
+character_img = pg.image.load("images/character.png")
+character_img = pg.transform.scale(character_img, (character_width, character_height))
+
+# Carica le immagini del cursore
+default_cursor_img = pg.image.load("images/cursor.png")
+default_cursor_img = pg.transform.scale(default_cursor_img, (30, 30))  # Ridimensiona se necessario
+
+trigger_cursor_img = pg.image.load("images/cursor_trigger.png")
+trigger_cursor_img = pg.transform.scale(trigger_cursor_img, (30, 30))  # Assicurati che il cursore sia delle stesse dimensioni
+
+wood_drop_img = pg.image.load("images/wood_drop.png")
+wood_drop_img = pg.transform.scale(wood_drop_img, (75, 75))
+
+# Generazione del mondo
+def generate_chunk(chunk_x, chunk_y):
+    chunk = []
+    for y_pos in range(CHUNK_SIZE):
+        for x_pos in range(CHUNK_SIZE):
+            target_x = chunk_x * CHUNK_SIZE + x_pos
+            target_y = chunk_y * CHUNK_SIZE + y_pos
+            tile_type = 0  # 0 = aria, 1 = erba, 2 = terra, 3 = roccia
+            height = int(noise.pnoise1(target_x * 0.1, repeat=9999999) * 5) + 10
+            if target_y > height:
+                tile_type = 2  # Terra
+            elif target_y == height:
+                tile_type = 1  # Erba
+            elif target_y == height - 1:
+                if random.randint(1, 16) == 1:
+                    tile_type = 3  # Roccia
+                    # Aggiungi l'informazione dell'albero
+                    chunk.append([target_x, target_y, 4])  # 4 = albero
+                    continue
+            if tile_type != 0:
+                chunk.append([target_x, target_y, tile_type])
+    return chunk
+
+def spawn_tree(x, y, block_size):
+    # Restituisce la posizione dell'albero
+    return (x * block_size, (y - 14) * block_size)
+
+def UI(health, mouse_pos):
+    hearth_width, hearth_height = 50, 50
+    hearth = pg.transform.scale(hearth_img, (hearth_width, hearth_height))
+    broken_hearth = pg.transform.scale(broken_hearth_img, (hearth_width, hearth_height))
+    
+    max_hearts = 10
+    full_hearts = health // 10
+    broken_hearts = max_hearts - full_hearts
+
+    for i in range(full_hearts):
+        screen.blit(hearth, (i * hearth_width, 0))
+
+    for i in range(broken_hearts):
+        screen.blit(broken_hearth, ((full_hearts + i) * hearth_width, 0))
+        
+    pg.mouse.set_visible(False)  # Nasconde il cursore del sistema
+
+    # Disegna l'immagine del cursore alla posizione del mouse
+    screen.blit(default_cursor_img, mouse_pos)
+    draw_toolbar()
+def movement(world):
+    global character_x, character_y, is_jumping, jump_speed, gravity, character_img, direction
+
+    keys = pg.key.get_pressed()
+
+    # Movimento orizzontale
+    if keys[pg.K_d]:
+        character_x += 5
+        if direction != 'right':  # Cambia direzione solo se non è già destra
+            character_img = pg.transform.flip(character_img, True, False)  # Flippa l'immagine
+            direction = 'right'
+    elif keys[pg.K_a]:
+        character_x -= 5
+        if direction != 'left':  # Cambia direzione solo se non è già sinistra
+            character_img = pg.transform.flip(character_img, True, False)  # Flippa l'immagine
+            direction = 'left'
+
+    # Salto
+    if keys[pg.K_SPACE] and not is_jumping:
+        is_jumping = True
+
+    if is_jumping:
+        character_y -= jump_speed
+        jump_speed -= gravity
+        if jump_speed < -10:  # Limita la velocità di salto per evitare accelerazioni eccessive
+            is_jumping = False
+            jump_speed = 10
+
+    # Applicazione della gravità
+    if not is_jumping:
+        fall_speed = 5
+        character_y += fall_speed
+
+    # Verifica collisioni dopo l'aggiornamento della posizione
+    collision(world)
+
+def tool_bar_update():
+    items = []
+    for i in range(10):
+        items.append(pg.Rect(i * 50, 0, 50, 50))
+        
+    return items
+    
+def drop_gravity(drops, world, ground_level, block_size):
+    drop_width = 75
+    drop_height = 75
+
+    for drop in drops:
+        drop[2] += gravity  # Incrementa la velocità di caduta dovuta alla gravità
+        new_y_position = drop[1] + drop[2]
+
+        # Crea un rettangolo per il drop
+        drop_rect = pg.Rect(drop[0], new_y_position, drop_width, drop_height)
+
+        # Verifica le collisioni con il mondo
+        on_ground = False
+        for chunk_key in world:
+            chunk = world[chunk_key]
+            for tile in chunk:
+                tile_x, tile_y, tile_type = tile
+                if tile_type != 0:  # Controlla solo i blocchi solidi
+                    tile_rect = pg.Rect(tile_x * block_size, tile_y * block_size, block_size, block_size)
+
+                    if drop_rect.colliderect(tile_rect):
+                        new_y_position = tile_y * block_size - drop_height
+                        drop[2] = 0  # Ferma la caduta
+                        on_ground = True
+                        break
+            if on_ground:
+                break
+
+        # Se il drop tocca il terreno o un oggetto solido, fermalo
+        if new_y_position >= ground_level - drop_height:
+            new_y_position = ground_level - drop_height
+            drop[2] = 0  # Ferma la caduta
+
+        drop[1] = new_y_position  # Aggiorna la posizione Y del drop
+
+    return drops
+
+
+def collision(world):
+    global character_y, is_jumping, jump_speed, tile_type
+
+    player_rect = pg.Rect(character_x, character_y, character_width, character_height)
+    on_ground = False
+
+    for chunk_key in world:
+        chunk = world[chunk_key]
+        for tile in chunk:
+            tile_x, tile_y, tile_type = tile
+            if tile_type != 0:  # Solo per blocchi solidi
+                tile_rect = pg.Rect(tile_x * block_size, tile_y * block_size, block_size, block_size)
+
+                if player_rect.colliderect(tile_rect):
+                    # Se il personaggio è sopra il blocco
+                    if player_rect.bottom > tile_rect.top and player_rect.top < tile_rect.bottom:
+                        if character_y + character_height > tile_y * block_size:
+                            character_y = tile_y * block_size - character_height
+                            is_jumping = False
+                            jump_speed = 10
+                            on_ground = True
+                    # Se il personaggio è ai lati del blocco
+                    elif player_rect.right > tile_rect.left and player_rect.left < tile_rect.right:
+                        if character_x + character_width > tile_x * block_size and character_x < (tile_x + 1) * block_size:
+                            if character_y < tile_y * block_size:
+                                character_y = tile_y * block_size - character_height
+                                is_jumping = False
+                                jump_speed = 10
+                                on_ground = True
+                    elif tile_type == 4:  # Se il personaggio è sopra l'albero
+                         continue
+                    
+
+    # Applica la gravità solo se il personaggio non è a terra
+    if not on_ground:
+        character_y += gravity
+
+def break_tree(mouse_pos, chunks, camera_offset, wood_drops):
+    for chunk_key in chunks:
+        chunk = chunks[chunk_key]
+        for tile in chunk:
+            tile_x, tile_y, tile_type = tile
+            if tile_type == 4:  # Se è un albero
+                tree_pos = spawn_tree(tile_x, tile_y, block_size)
+                # Regola la posizione dell'albero in base allo spostamento della telecamera
+                tree_rect = pg.Rect(tree_pos[0] - camera_offset[0], tree_pos[1] - camera_offset[1], 200, 400)
+                
+                if tree_rect.collidepoint(mouse_pos):
+                    print("Tree hit detected at:", tree_pos)
+                    chunk.remove(tile)
+                    num_wood_drops = random.randint(3, 7)  # Numero di pezzi di legno
+                    for _ in range(num_wood_drops):
+                        # Posizione iniziale del pezzo di legno
+                        wood_drop_x = tree_pos[0] + random.randint(5, 10)  # Posizione X del drop
+                        wood_drop_y = tree_pos[1] - 100  # Posizione Y del drop, 100 pixel sopra il suolo
+                        print(wood_drop_x, wood_drop_y)
+                        wood_drops.append([wood_drop_x, wood_drop_y, 0, "wood"])  # 0 è la velocità iniziale di caduta
+                        
+                    return
+
+def update_and_draw_drops(wood_drops, world, ground_level, block_size, screen, wood_drop_img, camera_offset):
+    wood_drops = drop_gravity(wood_drops, world, ground_level, block_size)
+
+    drop_width = 75
+    drop_height = 75
+    
+    for drop in wood_drops:
+        # Crea un rettangolo per il drop
+        drop_rect = pg.Rect(drop[0], drop[1], drop_width, drop_height)
+        
+        # Disegna il drop
+        screen.blit(wood_drop_img, (drop[0] - camera_offset[0], drop[1] - camera_offset[1]))
+
+    return wood_drops
+
+
+def use_trigger(mouse_pos, chunks, camera_offset, wood_drops):
+    global mouse_press_start_time
+    click = pg.mouse.get_pressed()
+    current_time = time.time()
+
+    if click[0]:  # Se il tasto sinistro del mouse è premuto
+        if mouse_press_start_time is None:
+            mouse_press_start_time = current_time  # Inizia il cronometro
+        elif current_time - mouse_press_start_time >= mouse_held_duration:
+            break_tree(mouse_pos, chunks, camera_offset, wood_drops)  # Chiama la funzione per rompere l'albero
+            mouse_press_start_time = None  # Resetta il cronometro dopo l'azione
+    else:
+        mouse_press_start_time = None  # Resetta il cronometro se il mouse viene rilasciato
+
+def update_drops(wood_drops, world, ground_level):
+    # Aggiorna la posizione dei drop chiamando drop_gravity
+    wood_drops = drop_gravity(wood_drops, world, ground_level)
+    # Potresti aggiungere qui la logica per disegnare i drop sullo schermo o per altre azioni
+    return wood_drops
+
+        
+def gameplay():
+    global health, character_x, character_y
+    chunks = {}
+    clock = pg.time.Clock()
+    wood_drops = []
+
+    tree_img = pg.image.load("images/tree.png")
+    tree_img = pg.transform.scale(tree_img, (200, 400))
+
+    wood_drop_img = pg.image.load("images/wood_drop.png")
+    wood_drop_img = pg.transform.scale(wood_drop_img, (75, 75))
+
+    background_img = pg.image.load("images/background.jpg")
+    background_img = pg.transform.scale(background_img, (1280, 720))
+
+    while True:
+        time_delta = clock.tick(60) / 1000.0
+
+        for event in pg.event.get():
+            if event.type == pg.QUIT:
+                pg.quit()
+                quit()
+
+        screen.blit(background_img, (0, 0))
+
+        camera_offset = [character_x - screen.get_width() // 2, character_y - screen.get_height() // 2]
+
+        chunk_x = character_x // (CHUNK_SIZE * block_size)
+        chunk_y = character_y // (CHUNK_SIZE * block_size)
+
+        for dx in range(-1, 2):
+            for dy in range(-1, 2):
+                target_chunk_x = chunk_x + dx
+                target_chunk_y = chunk_y + dy
+                chunk_key = (target_chunk_x, target_chunk_y)
+                if chunk_key not in chunks:
+                    chunks[chunk_key] = generate_chunk(target_chunk_x, target_chunk_y)
+
+                chunk = chunks[chunk_key]
+                for tile in chunk:
+                    tile_x, tile_y, tile_type = tile
+                    tile_rect = pg.Rect(tile_x * block_size - camera_offset[0], tile_y * block_size - camera_offset[1], block_size, block_size)
+                    
+                    if tile_type == 1:
+                        pg.draw.rect(screen, (34, 139, 34), tile_rect)
+                    elif tile_type == 2:
+                        pg.draw.rect(screen, (139, 69, 19), tile_rect)
+                    elif tile_type == 3:
+                        pg.draw.rect(screen, (169, 169, 169), tile_rect)
+                    elif tile_type == 4:
+                        tree_pos = spawn_tree(tile_x, tile_y, block_size)
+                        screen.blit(tree_img, (tree_pos[0] - camera_offset[0], tree_pos[1] - camera_offset[1]))
+
+        mouse_pos = pg.mouse.get_pos()
+        UI(health, mouse_pos)
+        use_trigger(mouse_pos, chunks, camera_offset, wood_drops)
+
+        movement(chunks)
+
+        is_over_tree = False
+        for chunk_key in chunks:
+            chunk = chunks[chunk_key]
+            for tile in chunk:
+                tile_x, tile_y, tile_type = tile
+                if tile_type == 4:
+                    tree_pos = spawn_tree(tile_x, tile_y, block_size)
+                    tree_rect = pg.Rect(tree_pos[0] - camera_offset[0], tree_pos[1] - camera_offset[1], 200, 400)
+                    if tree_rect.collidepoint(mouse_pos):
+                        is_over_tree = True
+                        break
+            if is_over_tree:
+                break
+
+        if is_over_tree:
+            screen.blit(trigger_cursor_img, mouse_pos)
+        else:
+            screen.blit(default_cursor_img, mouse_pos)
+
+        screen.blit(character_img, (character_x - camera_offset[0], character_y - camera_offset[1]))
+
+        # Passa tutti gli argomenti alla funzione
+        update_and_draw_drops(wood_drops, chunks, character_y + character_height, block_size, screen, wood_drop_img, camera_offset)
+
+        pg.display.update()
+
+
+def draw_toolbar():
+    toolbar_rect = pg.Rect(1026, 0, 250, 50)  # Posizione e dimensioni della toolbar
+    pg.draw.rect(screen, (255, 215, 0), toolbar_rect)  # Sfondo dorato
+
+    num_slots = 10
+    slot_width = toolbar_rect.width // num_slots
+    slot_height = toolbar_rect.height
+    for i in range(num_slots):
+        slot_rect = pg.Rect(toolbar_rect.left + i * slot_width, toolbar_rect.top, slot_width, slot_height)
+        pg.draw.rect(screen, (255, 255, 255), slot_rect)  # Spazi neri
+        pg.draw.rect(screen, (255, 215, 0), slot_rect, 2)  # Bordo dorato
+        
+def menu():
+    background = pg.image.load("images/menu.jpeg")
+    background = pg.transform.scale(background, (1280, 720))
+    
+    manager = pgui.UIManager((1280, 720))
+
+    button_width = 200
+    button_height = 50
+
+    play_button = pgui.elements.UIButton(
+        relative_rect=pg.Rect(((1280 - button_width) // 2, 300), (button_width, button_height)),
+        text='Play',
+        manager=manager
+    )
+
+    quit_button = pgui.elements.UIButton(
+        relative_rect=pg.Rect(((1280 - button_width) // 2, 400), (button_width, button_height)),
+        text='Quit',
+        manager=manager
+    )
+
+    clock = pg.time.Clock()
+
+    while True:
+        time_delta = clock.tick(60) / 1000.0
+        
+        for event in pg.event.get():
+            if event.type == pg.QUIT:
+                pg.quit()
+                quit()
+
+            manager.process_events(event)
+
+            if event.type == pgui.UI_BUTTON_PRESSED:
+                if event.ui_element == play_button:
+                    gameplay()
+                elif event.ui_element == quit_button:
+                    pg.quit()
+                    quit()
+
+        manager.update(time_delta)
+        
+        screen.blit(background, (0, 0))
+        manager.draw_ui(screen)
+        pg.display.update()
+
+menu()
