@@ -22,6 +22,12 @@ world_height = 100
 block_size = 25
 mouse_press_start_time = None
 mouse_held_duration = 3  # Durata in secondi
+slot_size = 50
+selected_slot = 0  # Inizializza con un valore valido
+slot_positions = []
+items_in_slot = [None] * 10
+
+drops = ["wood", "dirt", "stone"]
 
 pg.init()
 
@@ -90,7 +96,7 @@ def UI(health, mouse_pos):
 
     # Disegna l'immagine del cursore alla posizione del mouse
     screen.blit(default_cursor_img, mouse_pos)
-    draw_toolbar()
+    tool_bar_logic()
 def movement(world):
     global character_x, character_y, is_jumping, jump_speed, gravity, character_img, direction
 
@@ -127,12 +133,7 @@ def movement(world):
     # Verifica collisioni dopo l'aggiornamento della posizione
     collision(world)
 
-def tool_bar_update():
-    items = []
-    for i in range(10):
-        items.append(pg.Rect(i * 50, 0, 50, 50))
-        
-    return items
+
     
 def drop_gravity(drops, world, ground_level, block_size):
     drop_width = 75
@@ -268,7 +269,8 @@ def update_drops(wood_drops, world, ground_level):
     # Potresti aggiungere qui la logica per disegnare i drop sullo schermo o per altre azioni
     return wood_drops
 
-        
+    
+    
 def gameplay():
     global health, character_x, character_y
     chunks = {}
@@ -327,6 +329,8 @@ def gameplay():
         use_trigger(mouse_pos, chunks, camera_offset, wood_drops)
 
         movement(chunks)
+        wood_drops = update_and_draw_drops(wood_drops, chunks, character_y + character_height, block_size, screen, wood_drop_img, camera_offset)
+        collect_items(wood_drops)  # Assicurati di passare la lista aggiornata
 
         is_over_tree = False
         for chunk_key in chunks:
@@ -349,24 +353,104 @@ def gameplay():
 
         screen.blit(character_img, (character_x - camera_offset[0], character_y - camera_offset[1]))
 
-        # Passa tutti gli argomenti alla funzione
-        update_and_draw_drops(wood_drops, chunks, character_y + character_height, block_size, screen, wood_drop_img, camera_offset)
-
         pg.display.update()
+def draw_slots():
+    global slot_positions, selected_slot
+    screen_width = screen.get_width()  # Get the width of the screen
+    toolbar_y = 670  # Position the toolbar at the bottom of the screen
+    
+    total_slots_width = (slot_size + 10) * 10 - 10  # Total width of all slots including spacing
+    start_x = screen_width - total_slots_width  # Start position for the slots
+
+    slot_positions = [(start_x + i * (slot_size + 10), toolbar_y) for i in range(10)]  # Updated positions of slots
+
+    for i, pos in enumerate(slot_positions):
+        color = (255, 0, 0) if i == selected_slot else (0, 255, 0)
+        slot_rect = pg.Rect(pos[0], pos[1], slot_size, slot_size)
+        pg.draw.rect(screen, color, slot_rect, 2)
+
+        # Draw item in the slot if there's an item
+        if items_in_slot[i] is not None:
+            item_image = wood_drop_img  # Placeholder for item image
+            screen.blit(item_image, (pos[0], pos[1]))
+        number_of_items = items_in_slot[i]['quantity'] if items_in_slot[i] is not None else 0
+        font = pg.font.Font(None, 24)  # Load a font
+        text_surface = font.render(f"{number_of_items}", True, (255, 255, 255))
+        screen.blit(text_surface, (pos[0] + slot_size - text_surface.get_width(), pos[1] + slot_size - text_surface.get_height()))
 
 
-def draw_toolbar():
-    toolbar_rect = pg.Rect(1026, 0, 250, 50)  # Posizione e dimensioni della toolbar
-    pg.draw.rect(screen, (255, 215, 0), toolbar_rect)  # Sfondo dorato
+def tool_bar_logic():
+    global selected_slot, slot_positions
+    mouse_pos = pg.mouse.get_pos()
 
-    num_slots = 10
-    slot_width = toolbar_rect.width // num_slots
-    slot_height = toolbar_rect.height
-    for i in range(num_slots):
-        slot_rect = pg.Rect(toolbar_rect.left + i * slot_width, toolbar_rect.top, slot_width, slot_height)
-        pg.draw.rect(screen, (255, 255, 255), slot_rect)  # Spazi neri
-        pg.draw.rect(screen, (255, 215, 0), slot_rect, 2)  # Bordo dorato
-        
+    for event in pg.event.get():
+        if event.type == pg.QUIT:
+            pg.quit()
+            exit()
+
+        if event.type == pg.MOUSEBUTTONDOWN:
+            if event.button == 1:  # Left mouse click
+                for i, pos in enumerate(slot_positions):
+                    slot_rect = pg.Rect(pos[0], pos[1], slot_size, slot_size)
+                    if slot_rect.collidepoint(mouse_pos):
+                        selected_slot = i
+                        break
+            elif event.button == 4:  # Mouse wheel up
+                selected_slot = (selected_slot - 1) % len(slot_positions)
+            elif event.button == 5:  # Mouse wheel down
+                selected_slot = (selected_slot + 1) % len(slot_positions)
+
+    draw_slots()  # Draw updated slots
+
+
+def add_to_slot(item):
+    global items_in_slot
+
+    # Trova lo slot con la maggiore quantità di oggetti dello stesso tipo
+    max_quantity = 0
+    slot_index_to_add = None
+
+    for i, slot in enumerate(items_in_slot):
+        if slot is not None:
+            if slot['item'] == item:
+                if slot['quantity'] > max_quantity:
+                    max_quantity = slot['quantity']
+                    slot_index_to_add = i
+
+    # Se non è stato trovato uno slot con lo stesso tipo di oggetto, cerca uno slot vuoto
+    if slot_index_to_add is None:
+        for i, slot in enumerate(items_in_slot):
+            if slot is None:
+                slot_index_to_add = i
+                break
+
+    # Se è stato trovato uno slot valido, aggiungi l'oggetto
+    if slot_index_to_add is not None:
+        if items_in_slot[slot_index_to_add] is None:
+            items_in_slot[slot_index_to_add] = {'item': item, 'quantity': 1}
+        else:
+            if items_in_slot[slot_index_to_add]['item'] == item and items_in_slot[slot_index_to_add]['quantity'] < 999:
+                items_in_slot[slot_index_to_add]['quantity'] += 1
+
+
+def collect_items(drops):
+    global character_x, character_y, character_width, character_height, items_in_slot
+
+    character_rect = pg.Rect(character_x, character_y, character_width, character_height)
+
+    for drop in drops[:]:  # Iterate over a copy of the list to allow modification
+        if isinstance(drop, (tuple, list)) and len(drop) >= 4:
+            try:
+                drop_x, drop_y, drop_fall_speed, drop_type = drop
+                drop_rect = pg.Rect(drop_x, drop_y, 75, 75)  # Size of the drop item
+
+                if character_rect.colliderect(drop_rect):
+                    add_to_slot(drop_type)  # Add the item to the selected slot
+                    drops.remove(drop)  # Remove the collected item
+            except ValueError:
+                print(f"Invalid drop format: {drop}")  # Debugging output
+
+
 def menu():
     background = pg.image.load("images/menu.jpeg")
     background = pg.transform.scale(background, (1280, 720))
