@@ -1,0 +1,15 @@
+{
+    "recipes": [
+        {
+            "output": {
+                "item": "torch",
+                "count": 4
+            },
+            "ingredients": [
+                {"item": "wood", "count": 1},
+                {"item": "hot_shell", "count": 1}
+            ]
+        }
+        
+    ]
+}
