@@ -12,10 +12,6 @@ from drop import *
 from save_and_load import *
 from music import *
 
-
-
-
-
 def use_trigger(mouse_pos, chunks, camera_offset, all_drops):
     global mouse_press_start_time
     click = pg.mouse.get_pressed()
@@ -29,12 +25,7 @@ def use_trigger(mouse_pos, chunks, camera_offset, all_drops):
             mouse_press_start_time = None
     else:
         mouse_press_start_time = None
-
-
-
-
-
-
+        
 def gameplay():
     global character_x, character_y, character_height, opacity, active_hash_snails, screen, health, drops, items_in_slot
     
