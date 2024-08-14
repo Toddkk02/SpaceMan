@@ -35,7 +35,8 @@ drops = ["wood", "dirt", "stone", "hot shell"]
 fixed_y_positions = [150]
 last_collision_time = 0
 collision_cooldown = 1000  # Millisecondi di cooldown
-
+global chunks
+chunks = {}
 
 
 pg.init()
@@ -96,7 +97,9 @@ def load_game():
         )
     except (FileNotFoundError, json.JSONDecodeError) as e:
         print(f"Error loading game: {e}")
-        return (100, 0, 0, [None] * 10, {}, [])
+        return initialize_game()
+
+
 
 def initialize_game():
     global health, character_x, character_y, items_in_slot, chunks
@@ -105,7 +108,7 @@ def initialize_game():
     character_y = 100
     items_in_slot = [None] * 10
     chunks = {}
-    
+    return (100, 0, 0, [None] * 10, {}, [])
 # Generazione del mondo
 def generate_chunk(chunk_x, chunk_y):
     chunk = []
@@ -143,7 +146,7 @@ last_movement_time = pg.time.get_ticks()
 def UI(health, mouse_pos, time_delta):
     global time_to_auto_health, last_movement_time
     global character_x, character_y
-
+    print(character_x, character_y)
     hearth_width, hearth_height = 50, 50
     hearth = pg.transform.scale(hearth_img, (hearth_width, hearth_height))
     broken_hearth = pg.transform.scale(broken_hearth_img, (hearth_width, hearth_height))
@@ -318,6 +321,7 @@ def draw_circle_around_player(screen, character_x, character_y, radius):
     pg.draw.circle(screen, (255, 0, 0), (character_x + character_width // 2, character_y + character_height // 2), radius, 2)
 
 
+
 def update_and_draw_drops(drops, world, ground_level, block_size, screen, wood_drop_img, hot_shell_drop_img, camera_offset):
     drops = drop_gravity(drops, world, ground_level, block_size)
 
@@ -339,78 +343,169 @@ for item in item_images:
 
 
 def crafting_menu():
-    # Variabili del menu
-    
-    bar_width, bar_height = 800, 100
-    bar_x, bar_y = (screen.get_width() - bar_width) // 2, (screen.get_height() - bar_height) // 2
-    bar_color = ()  # Colore di sfondo della barra
-    item_size = 50
-    items_per_bar = bar_width // item_size
-    scroll_speed = 10
-    
-    
-    
-    # Stato della scroll
-    scroll_pos = 0
-    max_scroll = max(0, len(item_images) - items_per_bar)
-    
-    running = True
-    while running:
+    crafting_open = True
+    crafting_background = pg.Surface((400, 300))
+    crafting_background.fill((200, 200, 200))
+    crafting_rect = crafting_background.get_rect(center=(640, 360))
+
+    font = pg.font.Font(None, 36)
+    craft_torch_text = font.render("Craft Torch", True, (0, 0, 0))
+    craft_torch_rect = craft_torch_text.get_rect(center=(640, 360))
+
+    while crafting_open:
         for event in pg.event.get():
             if event.type == pg.QUIT:
                 pg.quit()
-                exit()
+                sys.exit()
+            if event.type == pg.KEYDOWN:
+                if event.key == pg.K_e:
+                    crafting_open = False
             if event.type == pg.MOUSEBUTTONDOWN:
-                if event.button == 4:  # Rotella del mouse su
-                    scroll_pos = max(0, scroll_pos - 1)
-                elif event.button == 5:  # Rotella del mouse giù
-                    scroll_pos = min(max_scroll, scroll_pos + 1)
+                if craft_torch_rect.collidepoint(event.pos):
+                    craft_torch()
 
-        # Pulisce lo schermo
+        screen.blit(crafting_background, crafting_rect)
+        screen.blit(craft_torch_text, craft_torch_rect)
+        screen.blit(default_cursor_img, pg.mouse.get_pos())
+        pg.display.flip()
+def craft_torch():
+    global items_in_slot
+    # Check if player has necessary items (e.g., 1 wood and 1 hot shell)
+    has_wood = any(slot and slot['item'] == 'wood' and slot['quantity'] >= 1 for slot in items_in_slot)
+    has_hot_shell = any(slot and slot['item'] == 'hot shell' and slot['quantity'] >= 1 for slot in items_in_slot)
 
-        # Disegna la barra di crafting
-        pg.draw.rect(screen, bar_color, (bar_x, bar_y, bar_width, bar_height))
+    if has_wood and has_hot_shell:
+        # Remove crafting materials
+        remove_item('wood', 1)
+        remove_item('hot shell', 1)
+        # Add torch to inventory
+        add_to_slot('torch')
+        print("Torch crafted!")
+    else:
+        print("Not enough materials to craft a torch!")
 
-        # Disegna gli oggetti craftabili
-        for i in range(items_per_bar):
-            index = scroll_pos + i
-            if index < len(item_images):
-                item_x = bar_x + i * item_size
-                item_y = bar_y + (bar_height - item_size) // 2
-                screen.blit(item_images[index], (item_x, item_y))
+def remove_item(item_name, quantity):
+    global items_in_slot
+    for slot in items_in_slot:
+        if slot and slot['item'] == item_name:
+            if slot['quantity'] > quantity:
+                slot['quantity'] -= quantity
+                return
+            elif slot['quantity'] == quantity:
+                slot.clear()
+                return
+            else:
+                quantity -= slot['quantity']
+                slot.clear()
 
-        # Aggiorna lo schermo
-        pg.display.update()
-        
+def place_torch(mouse_pos, chunks, camera_offset):
+    global items_in_slot, selected_slot
+    
+    if items_in_slot[selected_slot] is None or items_in_slot[selected_slot]['item'] != 'torch':
+        return
+
+    chunk_x = int((mouse_pos[0] + camera_offset[0]) // (CHUNK_SIZE * block_size))
+    chunk_y = int((mouse_pos[1] + camera_offset[1]) // (CHUNK_SIZE * block_size))
+    chunk_key = (chunk_x, chunk_y)
+    
+    if chunk_key not in chunks:
+        chunks[chunk_key] = []
+
+    tile_x = int((mouse_pos[0] + camera_offset[0]) // block_size)
+    tile_y = int((mouse_pos[1] + camera_offset[1]) // block_size)
+    
+    chunks[chunk_key].append([tile_x, tile_y, 5])  # 5 could be the ID for torch
+    items_in_slot[selected_slot]['quantity'] -= 1
+    
+    if items_in_slot[selected_slot]['quantity'] == 0:
+        items_in_slot[selected_slot] = None
+
+def draw_torch_light(screen, torch_pos, camera_offset, chunks, day_opacity):
+    light_radius = 10  # Raggio della luce in blocchi
+    max_brightness = 255
+    
+    for dy in range(-light_radius, light_radius + 1):
+        for dx in range(-light_radius, light_radius + 1):
+            block_x = torch_pos[0] // block_size + dx
+            block_y = torch_pos[1] // block_size + dy
+            
+            distance = math.sqrt(dx**2 + dy**2)
+            if distance <= light_radius:
+                brightness = int(max_brightness * (1 - distance / light_radius))
+                brightness = min(brightness, 255 - day_opacity)  # Regola la luminosità in base al ciclo giorno/notte
+                
+                screen_x = block_x * block_size - camera_offset[0]
+                screen_y = block_y * block_size - camera_offset[1]
+                
+                light_surf = pg.Surface((block_size, block_size), pg.SRCALPHA)
+                light_surf.fill((255, 200, 100, brightness))
+                screen.blit(light_surf, (screen_x, screen_y), special_flags=pg.BLEND_RGBA_ADD)
+
+                # Illumina i blocchi vicini
+                chunk_key = (block_x // CHUNK_SIZE, block_y // CHUNK_SIZE)
+                if chunk_key in chunks:
+                    for tile in chunks[chunk_key]:
+                        if tile[0] == block_x and tile[1] == block_y:
+                            tile_rect = pg.Rect(screen_x, screen_y, block_size, block_size)
+                            pg.draw.rect(screen, (brightness, brightness, brightness), tile_rect, 1)
+
+def place_wood(mouse_pos, chunks, camera_offset):
+    global items_in_slot, selected_slot
+    
+    if items_in_slot[selected_slot] is None or items_in_slot[selected_slot]['item'] != 'wood':
+        return
+
+    chunk_x = int((mouse_pos[0] + camera_offset[0]) // (CHUNK_SIZE * block_size))
+    chunk_y = int((mouse_pos[1] + camera_offset[1]) // (CHUNK_SIZE * block_size))
+    chunk_key = (chunk_x, chunk_y)
+    
+    if chunk_key not in chunks:
+        chunks[chunk_key] = []
+
+    tile_x = int((mouse_pos[0] + camera_offset[0]) // block_size)
+    tile_y = int((mouse_pos[1] + camera_offset[1]) // block_size)
+    
+    # Aggiungi il blocco di legno al chunk
+    chunks[chunk_key].append([tile_x, tile_y, 6])  # 6 potrebbe essere l'ID per il legno
+    items_in_slot[selected_slot]['quantity'] -= 1
+    
+    if items_in_slot[selected_slot]['quantity'] == 0:
+        items_in_slot[selected_slot] = None
+
+def remove_wood(mouse_pos, chunks, camera_offset):
+    chunk_x = int((mouse_pos[0] + camera_offset[0]) // (CHUNK_SIZE * block_size))
+    chunk_y = int((mouse_pos[1] + camera_offset[1]) // (CHUNK_SIZE * block_size))
+    chunk_key = (chunk_x, chunk_y)
+    
+    if chunk_key in chunks:
+        tile_x = int((mouse_pos[0] + camera_offset[0]) // block_size)
+        tile_y = int((mouse_pos[1] + camera_offset[1]) // block_size)
+        for tile in chunks[chunk_key]:
+            if tile[0] == tile_x and tile[1] == tile_y and tile[2] == 6:  # 6 è l'ID per il legno
+                chunks[chunk_key].remove(tile)
+                break  
 def use_trigger(mouse_pos, chunks, camera_offset, all_drops):
-    global mouse_press_start_time, active_hash_snails
+    global mouse_press_start_time, snails
 
     click = pg.mouse.get_pressed()
     current_time = time.time()
 
     player_center = (character_x + character_width // 2, character_y + character_height // 2)
-    radius = 100
+    radius = 200
 
-    if click[0]:
-        if mouse_press_start_time is None:
-            mouse_press_start_time = current_time
-        elif current_time - mouse_press_start_time >= mouse_held_duration:
-            for snail in active_hash_snails:
-                snail_pos = (snail['x'], snail['y'])
-                distance = pg.math.Vector2(player_center).distance_to(snail_pos)
+    if click[0]:  # Left click
+        for snail in snails[:]:  # Use a copy of the list to safely remove items
+            snail_pos = (snail.x, snail.y)
+            distance = pg.math.Vector2(player_center).distance_to(snail_pos)
 
-                if distance <= radius:
-                    active_hash_snails.remove(snail)
-                    # Aggiungi le hot shell ai drop
-                    num_hot_shell_drops = random.randint(1, 3)
-                    for _ in range(num_hot_shell_drops):
-                        drop_x = snail['x'] + random.randint(-10, 10)
-                        drop_y = snail['y'] - random.randint(10, 20)
-                        all_drops.append([float(drop_x), float(drop_y), 0.0, "hot shell"])
-
-            mouse_press_start_time = None
-    else:
-        mouse_press_start_time = None
+            if distance <= radius:
+                snails.remove(snail)
+                # Add hot shell drops
+                num_hot_shell_drops = random.randint(1, 3)
+                for _ in range(num_hot_shell_drops):
+                    drop_x = snail.x + random.randint(-10, 10)
+                    drop_y = snail.y - random.randint(10, 20)
+                    all_drops.append([float(drop_x), float(drop_y), 0.0, "hot shell"])
 
 
 def update_drops(wood_drops, world, ground_level):
@@ -433,6 +528,7 @@ def draw_light(screen, light_pos, light_radius, light_color):
 
     
 def day_and_night(opacity):
+    global filter_background
     filter_background = pg.image.load("images/night.jpg")
     filter_background = pg.transform.scale(filter_background, (1280, 720))
     filter_background.set_alpha(opacity)  # Imposta l'opacità del filtro
@@ -505,11 +601,12 @@ def gameplay():
                         crafting_menu()
                 if event.type == pg.MOUSEBUTTONDOWN:
                     if event.button == 1:  # Left click
-                        check_snail_collection(event.pos, camera_offset)
+                        use_trigger(event.pos, chunks, camera_offset, all_drops)
                         break_block(event.pos, chunks, camera_offset)
                         break_tree(event.pos, chunks, camera_offset, all_drops)
                     elif event.button == 3:  # Right click
                         place_block(event.pos, chunks, camera_offset)
+                        place_torch(event.pos, chunks, camera_offset)
 
         if not is_paused:
             # Update and render the game here
@@ -557,6 +654,7 @@ def gameplay():
             spawn_snails(camera_offset, screen.get_width(), screen.get_height())
             update_snails(time_delta)
             draw_snails(screen, camera_offset)
+            check_snail_collision()
 
             # Draw collection circle
             player_center = (character_x - camera_offset[0] + character_width // 2, 
@@ -616,6 +714,13 @@ def gameplay():
                             break
                 if is_over_tree:
                     break
+            for chunk_key in chunks:
+                chunk = chunks[chunk_key]
+                for tile in chunk:
+                    tile_x, tile_y, tile_type = tile
+                    if tile_type == 5:  # Torch
+                        torch_pos = (tile_x * block_size, tile_y * block_size)
+                        draw_torch_light(screen, torch_pos, camera_offset, chunks, opacity)
 
             if is_over_tree:
                 screen.blit(trigger_cursor_img, mouse_pos)
@@ -636,75 +741,50 @@ class Snail:
     def __init__(self, x, y):
         self.x = x
         self.y = y
-        self.speed = 25  # 25 pixels per second
+        self.speed = 50  # Aumentato per inseguire il giocatore
         self.texture = pg.image.load("images/hash_snail.png").convert_alpha()
-        self.texture = pg.transform.scale(self.texture, (75, 75))
-    def move(self, dt):
-        angle = random.uniform(0, 2 * math.pi)
-        dx = self.speed * math.cos(angle) * dt
-        dy = self.speed * math.sin(angle) * dt
-        self.x += dx
-        self.y += dy
-
-snails = []
+        self.texture = pg.transform.scale(self.texture, (125, 125))
 
 def spawn_snails(camera_offset, screen_width, screen_height):
-    if len(snails) < 5:  # Limit the number of snails
-        # Spawn snails near the player
-        player_x = character_x - camera_offset[0]
-        player_y = character_y - camera_offset[1]
-        spawn_radius = 300  # Adjust as needed
-        
-        angle = random.uniform(0, 2 * math.pi)
-        distance = random.uniform(200, spawn_radius)
-        
-        x = player_x + distance * math.cos(angle)
-        y = player_y + distance * math.sin(angle)
-        
-        # Ensure snails spawn on the ground
-        ground_y = find_ground_y(x + camera_offset[0], chunks)
-        
-        snails.append(Snail(x + camera_offset[0], ground_y))
+    if random.randint(1, 300) == 1:  # 1 su 300 chance di spawn
+        side = random.choice(['top', 'bottom', 'left', 'right'])
+        if side == 'top':
+            x = random.randint(0, screen_width)
+            y = camera_offset[1] - 125
+        elif side == 'bottom':
+            x = random.randint(0, screen_width)
+            y = camera_offset[1] + screen_height
+        elif side == 'left':
+            x = camera_offset[0] - 125
+            y = random.randint(0, screen_height)
+        else:  # right
+            x = camera_offset[0] + screen_width
+            y = random.randint(0, screen_height)
+        snails.append(Snail(x, y))
 
-def find_ground_y(x, chunks):
-    chunk_x = int(x // (CHUNK_SIZE * block_size))
-    chunk_key = (chunk_x, 0)  # Assuming chunks are stored with y=0
-    
-    if chunk_key in chunks:
-        chunk = chunks[chunk_key]
-        for tile in reversed(chunk):  # Start from the bottom
-            if tile[2] != 0:  # If it's not air
-                return tile[1] * block_size
-    
-    return character_y  # Default to player's y if 
 def update_snails(dt):
+    global character_x, character_y
     for snail in snails:
-        snail.move(dt)
+        dx = character_x - snail.x
+        snail.x += (dx / abs(dx)) * snail.speed * dt
+        snail.y = character_y  # Mantiene le lumache sulla stessa y del personaggio
 
 def draw_snails(screen, camera_offset):
     for snail in snails:
         screen_x = snail.x - camera_offset[0]
         screen_y = snail.y - camera_offset[1]
-        
-def check_snail_collection(mouse_pos, camera_offset):
+        screen.blit(snail.texture, (screen_x, screen_y))
+def check_snail_collision():
     global health, last_collision_time
-    player_center = (character_x + character_width // 2, character_y + character_height // 2)
-    collection_radius = 200
-
     current_time = pg.time.get_ticks()
-
-    for snail in snails[:]:
-        snail_pos = (snail.x - camera_offset[0], snail.y - camera_offset[1])
-        distance = math.hypot(snail_pos[0] - player_center[0], snail_pos[1] - player_center[1])
-        
-        if distance <= collection_radius:
-            if pg.mouse.get_pressed()[0]:  # Left mouse button
-                snails.remove(snail)
-                add_to_slot("hot shell")
-            elif distance <= character_width / 2:  # Collision with player
-                if current_time - last_collision_time > collision_cooldown:
-                    health -= 10
-                    last_collision_time = current_time
+    
+    for snail in snails:
+        if pg.Rect(character_x, character_y, character_width, character_height).colliderect(
+            pg.Rect(snail.x, snail.y, 125, 125)):
+            if current_time - last_collision_time > 3000:  # 3 secondi di cooldown
+                health -= 10
+                last_collision_time = current_time
+            
 
 def break_block(mouse_pos, chunks, camera_offset):
     for chunk_key in chunks:
@@ -766,6 +846,7 @@ def draw_slots():
                 item_image = pg.image.load("images/grass.jpg")
             elif items_in_slot[i]['item'] == "block_2":  # Dirt
                 item_image = pg.image.load("images/dirt.jpg")
+                item_image = pg.transform.scale(item_image, (slot_size * 0.075, slot_size * 0.075))
             else:
                 item_image = wood_drop_img  # Default image
             item_image = pg.transform.scale(item_image, (slot_size, slot_size))
